@@ -33,16 +33,16 @@ def advance_state(state: Tuple[float, float, float], mode: str, amount: float, r
     x, y, yaw = state
 
     if mode == "S":
-        return x + amount * math.cos(yaw), y + amount * math.sin(yaw), yaw
+        return x + amount * math.cos(yaw), y + amount * math.sin(yaw), mod2pi(yaw)
 
     if mode == "L":
         cx, cy = turning_circle_center(state, "L", rho)
-        new_yaw = yaw + amount / rho
+        new_yaw = mod2pi(yaw + amount / rho)
         return cx + rho * math.sin(new_yaw), cy - rho * math.cos(new_yaw), new_yaw
 
     if mode == "R":
         cx, cy = turning_circle_center(state, "R", rho)
-        new_yaw = yaw - amount / rho
+        new_yaw = mod2pi(yaw - amount / rho)
         return cx - rho * math.sin(new_yaw), cy + rho * math.cos(new_yaw), new_yaw
 
     raise ValueError(f"Unknown mode {mode}")
@@ -101,14 +101,17 @@ def trace_relaxed_candidate(
     }
 
 
+def angle_close(a: float, b: float, tol: float = 1e-7) -> bool:
+    d = (a - b + math.pi) % (2.0 * math.pi) - math.pi
+    return abs(d) < tol
+
 
 def relaxed_LS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], rho: float):
-    x0, y0, yaw0 = start
+    x0, y0, _ = start
     gx, gy = goal_xy
 
     cx, cy = turning_circle_center(start, "L", rho)
-    vx = gx - cx
-    vy = gy - cy
+    vx, vy = gx - cx, gy - cy
     d = math.hypot(vx, vy)
 
     if d < rho - 1e-9:
@@ -117,24 +120,35 @@ def relaxed_LS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], 
     phi = math.atan2(vy, vx)
     delta = math.acos(rho / d)
 
-    theta = phi - delta
-    tx = cx + rho * math.cos(theta)
-    ty = cy + rho * math.sin(theta)
-
+    best = None
     start_radial = math.atan2(y0 - cy, x0 - cx)
-    arc = mod2pi(theta - start_radial)
-    straight = math.hypot(gx - tx, gy - ty)
 
-    return arc, straight
+    for theta in (phi + delta, phi - delta):
+        tx = cx + rho * math.cos(theta)
+        ty = cy + rho * math.sin(theta)
+
+        line_angle = math.atan2(gy - ty, gx - tx)
+        tangent_yaw = theta + math.pi / 2.0
+
+        if not angle_close(line_angle, tangent_yaw):
+            continue
+
+        arc = mod2pi(theta - start_radial)
+        straight = math.hypot(gx - tx, gy - ty)
+        total = rho * arc + straight
+
+        if best is None or total < best[0]:
+            best = (total, arc, straight)
+
+    return None if best is None else best[1:]
 
 
 def relaxed_RS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], rho: float):
-    x0, y0, yaw0 = start
+    x0, y0, _ = start
     gx, gy = goal_xy
 
     cx, cy = turning_circle_center(start, "R", rho)
-    vx = gx - cx
-    vy = gy - cy
+    vx, vy = gx - cx, gy - cy
     d = math.hypot(vx, vy)
 
     if d < rho - 1e-9:
@@ -143,94 +157,145 @@ def relaxed_RS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], 
     phi = math.atan2(vy, vx)
     delta = math.acos(rho / d)
 
-    theta = phi + delta
-    tx = cx + rho * math.cos(theta)
-    ty = cy + rho * math.sin(theta)
-
+    best = None
     start_radial = math.atan2(y0 - cy, x0 - cx)
-    arc = mod2pi(start_radial - theta)
-    straight = math.hypot(gx - tx, gy - ty)
 
-    return arc, straight
+    for theta in (phi + delta, phi - delta):
+        tx = cx + rho * math.cos(theta)
+        ty = cy + rho * math.sin(theta)
 
+        line_angle = math.atan2(gy - ty, gx - tx)
+        tangent_yaw = theta - math.pi / 2.0
+
+        if not angle_close(line_angle, tangent_yaw):
+            continue
+
+        arc = mod2pi(start_radial - theta)
+        straight = math.hypot(gx - tx, gy - ty)
+        total = rho * arc + straight
+
+        if best is None or total < best[0]:
+            best = (total, arc, straight)
+
+    return None if best is None else best[1:]
+def circle_intersections(
+    c0: Tuple[float, float],
+    r0: float,
+    c1: Tuple[float, float],
+    r1: float,
+):
+    x0, y0 = c0
+    x1, y1 = c1
+
+    dx = x1 - x0
+    dy = y1 - y0
+    d = math.hypot(dx, dy)
+
+    if d > r0 + r1 + 1e-9:
+        return []
+    if d < abs(r0 - r1) - 1e-9:
+        return []
+    if d < 1e-12:
+        return []
+
+    a = (r0 * r0 - r1 * r1 + d * d) / (2.0 * d)
+    h2 = r0 * r0 - a * a
+    if h2 < -1e-9:
+        return []
+
+    h = math.sqrt(max(0.0, h2))
+
+    xm = x0 + a * dx / d
+    ym = y0 + a * dy / d
+
+    rx = -dy * (h / d)
+    ry = dx * (h / d)
+
+    p1 = (xm + rx, ym + ry)
+    p2 = (xm - rx, ym - ry)
+
+    if math.hypot(p1[0] - p2[0], p1[1] - p2[1]) < 1e-10:
+        return [p1]
+
+    return [p1, p2]
 
 def relaxed_LR(start: Tuple[float, float, float], goal_xy: Tuple[float, float], rho: float):
-    x0, y0, yaw0 = start
+    x0, y0, _ = start
     gx, gy = goal_xy
 
     c1x, c1y = turning_circle_center(start, "L", rho)
 
-    dx = gx - c1x
-    dy = gy - c1y
-    D = math.hypot(dx, dy)
-
-    if D > 3.0 * rho + 1e-9 or D < rho - 1e-9:
+    centers = circle_intersections(
+        (c1x, c1y), 2.0 * rho,
+        (gx, gy), rho
+    )
+    if not centers:
         return None
 
-    phi = math.atan2(dy, dx)
-    cos_delta = D / (4.0 * rho)
-    if abs(cos_delta) > 1.0:
-        return None
-    delta = math.acos(max(-1.0, min(1.0, cos_delta)))
-
-
-    psi = phi - delta
-
-    c2x = c1x + 2.0 * rho * math.cos(psi)
-    c2y = c1y + 2.0 * rho * math.sin(psi)
-
-
-    tx = c1x + rho * math.cos(psi)
-    ty = c1y + rho * math.sin(psi)
-
+    best = None
     a0 = math.atan2(y0 - c1y, x0 - c1x)
-    at = math.atan2(ty - c1y, tx - c1x)
-    arc1 = mod2pi(at - a0)
 
-    bt = math.atan2(ty - c2y, tx - c2x)
-    bg = math.atan2(gy - c2y, gx - c2x)
-    arc2 = mod2pi(bt - bg)
+    for c2x, c2y in centers:
+        tx = 0.5 * (c1x + c2x)
+        ty = 0.5 * (c1y + c2y)
 
-    return arc1, arc2
+        at = math.atan2(ty - c1y, tx - c1x)
+        bt = math.atan2(ty - c2y, tx - c2x)
+        bg = math.atan2(gy - c2y, gx - c2x)
+
+        arc1 = mod2pi(at - a0)   
+        arc2 = mod2pi(bt - bg)
+
+
+        yaw_t_from_L = at + math.pi / 2.0
+        yaw_t_from_R = bt - math.pi / 2.0
+        if not angle_close(yaw_t_from_L, yaw_t_from_R):
+            continue
+
+        total = rho * (arc1 + arc2)
+        if best is None or total < best[0]:
+            best = (total, arc1, arc2)
+
+    return None if best is None else best[1:]
 
 
 def relaxed_RL(start: Tuple[float, float, float], goal_xy: Tuple[float, float], rho: float):
-    x0, y0, yaw0 = start
+    x0, y0, _ = start
     gx, gy = goal_xy
 
     c1x, c1y = turning_circle_center(start, "R", rho)
 
-    dx = gx - c1x
-    dy = gy - c1y
-    D = math.hypot(dx, dy)
-
-    if D > 3.0 * rho + 1e-9 or D < rho - 1e-9:
+    centers = circle_intersections(
+        (c1x, c1y), 2.0 * rho,
+        (gx, gy), rho
+    )
+    if not centers:
         return None
 
-    phi = math.atan2(dy, dx)
-    cos_delta = D / (4.0 * rho)
-    if abs(cos_delta) > 1.0:
-        return None
-    delta = math.acos(max(-1.0, min(1.0, cos_delta)))
-
-    psi = phi + delta
-
-    c2x = c1x + 2.0 * rho * math.cos(psi)
-    c2y = c1y + 2.0 * rho * math.sin(psi)
-
-    tx = c1x + rho * math.cos(psi)
-    ty = c1y + rho * math.sin(psi)
-
+    best = None
     a0 = math.atan2(y0 - c1y, x0 - c1x)
-    at = math.atan2(ty - c1y, tx - c1x)
-    arc1 = mod2pi(a0 - at)
 
-    bt = math.atan2(ty - c2y, tx - c2x)
-    bg = math.atan2(gy - c2y, gx - c2x)
-    arc2 = mod2pi(bg - bt)
+    for c2x, c2y in centers:
+        tx = 0.5 * (c1x + c2x)
+        ty = 0.5 * (c1y + c2y)
 
-    return arc1, arc2
+        at = math.atan2(ty - c1y, tx - c1x)
+        bt = math.atan2(ty - c2y, tx - c2x)
+        bg = math.atan2(gy - c2y, gx - c2x)
 
+        arc1 = mod2pi(a0 - at)
+        arc2 = mod2pi(bg - bt)
+
+        yaw_t_from_R = at - math.pi / 2.0
+        yaw_t_from_L = bt + math.pi / 2.0
+        if not angle_close(yaw_t_from_R, yaw_t_from_L):
+            continue
+
+        total = rho * (arc1 + arc2)
+        if best is None or total < best[0]:
+            best = (total, arc1, arc2)
+
+    return None if best is None else best[1:]
 
 RELAXED_BUILDERS = {
     "LS": (["L", "S"], relaxed_LS),
@@ -405,12 +470,12 @@ def plot_all_relaxed_candidates(
 
 def main():
     parser = argparse.ArgumentParser(description="Plot all relaxed Dubins path candidates.")
-    parser.add_argument("--x0", type=float, default=3.0, help="Start x")
-    parser.add_argument("--y0", type=float, default=5.0, help="Start y")
-    parser.add_argument("--yaw0_deg", type=float, default=140.0, help="Start heading in degrees")
-    parser.add_argument("--x1", type=float, default=3.0, help="Goal x")
-    parser.add_argument("--y1", type=float, default=1.0, help="Goal y")
-    parser.add_argument("--rho", type=float, default=1.5, help="Minimum turning radius")
+    parser.add_argument("--x0", type=float, default=0.0, help="Start x")
+    parser.add_argument("--y0", type=float, default=0.0, help="Start y")
+    parser.add_argument("--yaw0_deg", type=float, default=0.0, help="Start heading in degrees")
+    parser.add_argument("--x1", type=float, default=0.0, help="Goal x")
+    parser.add_argument("--y1", type=float, default=3.0, help="Goal y")
+    parser.add_argument("--rho", type=float, default=1.0, help="Minimum turning radius")
     parser.add_argument("--ds", type=float, default=0.01, help="Sampling step for drawing")
     parser.add_argument("--save", type=str, default=None, help="Optional path to save the figure")
     args = parser.parse_args()
