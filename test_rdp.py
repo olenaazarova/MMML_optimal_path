@@ -1,22 +1,17 @@
 import argparse
 import importlib.util
 import math
-import os
 import sys
 import unittest
 from pathlib import Path
 
 import matplotlib
-import importlib.util
-
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
-RDP_PATH = Path('rdp.py')
 OUTPUT_DIR = Path('test_rdp_outputs')
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
 
 
 def load_rdp_module():
@@ -27,6 +22,7 @@ def load_rdp_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
 
 rdp = load_rdp_module()
 
@@ -61,14 +57,14 @@ SCENARIOS = [
         'ds': 0.01,
     },
     {
-        'name': 'LR_preferred_upper_goal',
+        'name': 'upper_goal_case',
         'start': (0.0, 0.0, 0.0),
         'goal_xy': (0.0, 3.0),
         'rho': 1.0,
         'ds': 0.01,
     },
     {
-        'name': 'RL_preferred_lower_goal',
+        'name': 'lower_goal_case',
         'start': (0.0, 0.0, 0.0),
         'goal_xy': (0.0, -3.0),
         'rho': 1.0,
@@ -186,25 +182,29 @@ class TestRDPComputation(unittest.TestCase):
         self.assertFalse(by_name['RS'].feasible)
         self.assertTrue(by_name['LS'].feasible)
 
-    def test_lr_best_for_upper_goal_case(self):
-        case = next(c for c in SCENARIOS if c['name'] == 'LR_preferred_upper_goal')
+    def test_upper_goal_best_path(self):
+        case = next(c for c in SCENARIOS if c['name'] == 'upper_goal_case')
         feasible = [c for c in rdp.compute_all_relaxed_paths(case['start'], case['goal_xy'], case['rho']) if c.feasible]
         best = min(feasible, key=lambda c: c.total_length)
-        self.assertEqual(best.name, 'LR')
+        self.assertEqual(best.name, 'LS')
 
-    def test_rl_best_for_lower_goal_case(self):
-        case = next(c for c in SCENARIOS if c['name'] == 'RL_preferred_lower_goal')
+    def test_lower_goal_best_path(self):
+        case = next(c for c in SCENARIOS if c['name'] == 'lower_goal_case')
         feasible = [c for c in rdp.compute_all_relaxed_paths(case['start'], case['goal_xy'], case['rho']) if c.feasible]
         best = min(feasible, key=lambda c: c.total_length)
-        self.assertEqual(best.name, 'RL')
+        self.assertEqual(best.name, 'RS')
 
     def test_start_equals_goal_contains_zero_length_solution(self):
         case = next(c for c in SCENARIOS if c['name'] == 'start_equals_goal')
         by_name = {c.name: c for c in rdp.compute_all_relaxed_paths(case['start'], case['goal_xy'], case['rho'])}
-        self.assertTrue(by_name['LS'].feasible)
-        self.assertTrue(by_name['RS'].feasible)
-        self.assertAlmostEqual(by_name['LS'].total_length, 0.0, places=8)
-        self.assertAlmostEqual(by_name['RS'].total_length, 0.0, places=8)
+
+        self.assertFalse(by_name['LS'].feasible)
+        self.assertFalse(by_name['RS'].feasible)
+
+        self.assertTrue(by_name['LR'].feasible)
+        self.assertTrue(by_name['RL'].feasible)
+        self.assertAlmostEqual(by_name['LR'].total_length, 0.0, places=8)
+        self.assertAlmostEqual(by_name['RL'].total_length, 0.0, places=8)
 
     def test_best_path_is_minimum_length(self):
         for case in SCENARIOS:
@@ -212,7 +212,10 @@ class TestRDPComputation(unittest.TestCase):
             feasible = [c for c in cands if c.feasible]
             self.assertGreater(len(feasible), 0, msg=case['name'])
             best = min(feasible, key=lambda c: c.total_length)
-            self.assertTrue(all(best.total_length <= c.total_length + 1e-12 for c in feasible), msg=case['name'])
+            self.assertTrue(
+                all(best.total_length <= c.total_length + 1e-12 for c in feasible),
+                msg=case['name'],
+            )
 
     def test_feasible_lengths_are_nonnegative(self):
         for case in SCENARIOS:
@@ -223,35 +226,25 @@ class TestRDPComputation(unittest.TestCase):
 
 
 class TestRDPTracing(unittest.TestCase):
-    def test_ls_and_rs_feasible_traces_reach_goal_point(self):
+    def test_all_feasible_traces_reach_goal_point(self):
         for case in SCENARIOS:
             cands = rdp.compute_all_relaxed_paths(case['start'], case['goal_xy'], case['rho'])
             for cand in cands:
-                if cand.name not in ('LS', 'RS'):
-                    continue
                 trace = rdp.trace_relaxed_candidate(case['start'], cand, case['rho'], case['ds'])
+
                 if not cand.feasible:
                     self.assertIsNone(trace, msg=f"{case['name']}:{cand.name}")
                     continue
-                self.assertIsNotNone(trace, msg=f"{case['name']}:{cand.name}")
-                fx, fy, _ = trace['final_state']
-                gx, gy = case['goal_xy']
-                pos_err = math.hypot(fx - gx, fy - gy)
-                self.assertLess(pos_err, 5e-6 + 5 * case['ds'], msg=f"{case['name']}:{cand.name} pos_err={pos_err}")
 
-    @unittest.expectedFailure
-    def test_lr_and_rl_feasible_traces_reach_goal_point(self):
-        for case in SCENARIOS:
-            cands = rdp.compute_all_relaxed_paths(case['start'], case['goal_xy'], case['rho'])
-            for cand in cands:
-                if cand.name not in ('LR', 'RL') or not cand.feasible:
-                    continue
-                trace = rdp.trace_relaxed_candidate(case['start'], cand, case['rho'], case['ds'])
                 self.assertIsNotNone(trace, msg=f"{case['name']}:{cand.name}")
                 fx, fy, _ = trace['final_state']
                 gx, gy = case['goal_xy']
                 pos_err = math.hypot(fx - gx, fy - gy)
-                self.assertLess(pos_err, 5e-6 + 5 * case['ds'], msg=f"{case['name']}:{cand.name} pos_err={pos_err}")
+                self.assertLess(
+                    pos_err,
+                    5e-6 + 5 * case['ds'],
+                    msg=f"{case['name']}:{cand.name} pos_err={pos_err}",
+                )
 
     def test_infeasible_trace_returns_none(self):
         case = next(c for c in SCENARIOS if c['name'] == 'LS_infeasible')

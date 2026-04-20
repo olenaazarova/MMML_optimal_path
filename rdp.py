@@ -109,7 +109,9 @@ def angle_close(a: float, b: float, tol: float = 1e-7) -> bool:
 def relaxed_LS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], rho: float):
     x0, y0, _ = start
     gx, gy = goal_xy
-
+    if math.hypot(gx - x0, gy - y0) < 1e-12:
+        best = (0.0, 0.0, 0.0)
+        return best
     cx, cy = turning_circle_center(start, "L", rho)
     vx, vy = gx - cx, gy - cy
     d = math.hypot(vx, vy)
@@ -146,7 +148,9 @@ def relaxed_LS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], 
 def relaxed_RS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], rho: float):
     x0, y0, _ = start
     gx, gy = goal_xy
-
+    if math.hypot(gx - x0, gy - y0) < 1e-12:
+        best = (0.0, 0.0, 0.0)
+        return best
     cx, cy = turning_circle_center(start, "R", rho)
     vx, vy = gx - cx, gy - cy
     d = math.hypot(vx, vy)
@@ -178,6 +182,7 @@ def relaxed_RS(start: Tuple[float, float, float], goal_xy: Tuple[float, float], 
             best = (total, arc, straight)
 
     return None if best is None else best[1:]
+
 def circle_intersections(
     c0: Tuple[float, float],
     r0: float,
@@ -474,7 +479,7 @@ def main():
     parser.add_argument("--y0", type=float, default=0.0, help="Start y")
     parser.add_argument("--yaw0_deg", type=float, default=0.0, help="Start heading in degrees")
     parser.add_argument("--x1", type=float, default=0.0, help="Goal x")
-    parser.add_argument("--y1", type=float, default=3.0, help="Goal y")
+    parser.add_argument("--y1", type=float, default=0.0, help="Goal y")
     parser.add_argument("--rho", type=float, default=1.0, help="Minimum turning radius")
     parser.add_argument("--ds", type=float, default=0.01, help="Sampling step for drawing")
     parser.add_argument("--save", type=str, default=None, help="Optional path to save the figure")
